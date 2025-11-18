@@ -5,7 +5,7 @@ from typing import List, Dict, Tuple, Optional
 import torch
 from torch_geometric.data import Data
 import numpy as np
-from nn_server import Item
+from item_types import Item
 
 
 def item_to_features(item: Item, parent_width: float = 1920.0, parent_height: float = 1080.0) -> torch.Tensor:
