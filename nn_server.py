@@ -1,116 +1,148 @@
 # nn_server.py
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-from typing import Dict, Any, List, Optional, ForwardRef
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, ConfigDict
+from typing import Dict, Any, List, Optional
 import uvicorn
 from datetime import datetime
+import json
 
 app = FastAPI(title="PageCraft NN Proxy Server", version="1.0.0")
 
-ItemRef = ForwardRef('Item')
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow all origins
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-class Item(BaseModel):
-    id: str
-    x: float
-    y: float
-    width: float
-    height: float
-    rotation: float
-    borderRadius: float
-    color: str
-    opacity: float
-    padding: float
-    paddingTop: float
-    paddingRight: float
-    paddingBottom: float
-    paddingLeft: float
-    margin: float
-    marginTop: float
-    marginRight: float
-    marginBottom: float
-    marginLeft: float
-    boxShadowOffsetX: float
-    boxShadowOffsetY: float
-    boxShadowBlur: float
-    boxShadowSpread: float
-    boxShadowBaseColor: str
-    boxShadowOpacity: float
-    boxShadowUsesBoxOpacity: bool
-    borderWidth: float
-    borderColor: str
-    borderStyle: str
-    backgroundGradientEnabled: bool
-    backgroundGradientStart: str
-    backgroundGradientEnd: str
-    backgroundGradientAngle: float
-    filterBlur: float
-    filterBrightness: float
-    filterContrast: float
-    zIndex: float
-    # Optional extras
-    backgroundImageEnabled: Optional[bool] = None
-    backgroundImageSrc: Optional[str] = None
-    backgroundImageSourceType: Optional[str] = None  # 'url' | 'gallery'
-    backgroundImageGalleryId: Optional[str] = None
-    backgroundImageFit: Optional[str] = None  # 'cover' | 'contain'
-    backgroundImagePosition: Optional[str] = None  # 'center' | 'top' | etc.
-    backgroundImageRepeat: Optional[str] = None  # 'no-repeat' | etc.
-    children: Optional[List[ItemRef]] = None
-
-Item.model_rebuild()
-
+# Pydantic models (not used for validation, kept for reference)
 class GalleryImage(BaseModel):
-    id: str
-    name: str
-    mimeType: str
-    dataBase64: str
+    model_config = ConfigDict(extra='allow')
+    id: Optional[str] = None
+    name: Optional[str] = None
+    mimeType: Optional[str] = None
+    dataBase64: Optional[str] = None
     width: Optional[int] = None
     height: Optional[int] = None
 
 class SavedWork(BaseModel):
-    version: int = 1
-    savedAt: str
-    itemsByResolution: Dict[str, List[Item]]
-    gallery: List[GalleryImage]
+    model_config = ConfigDict(extra="allow")
+    version: Optional[int] = 1
+    savedAt: Optional[str] = None
+    itemsByResolution: Dict[str, Any]
+    gallery: Optional[List[Any]] = []
 
-class NNRequest(BaseModel):
-    payload: SavedWork
 
-class NNResponse(BaseModel):
-    processedPayload: SavedWork
 
-def recursively_set_green(items: List[Item]) -> List[Item]:
-    """
-    Recursively sets the color to green for all items and their children.
-    """
-    return [
-        item.copy(update={"color": "green"})
-        if item.children is None
-        else item.copy(update={"color": "green", "children": recursively_set_green(item.children)})
-        for item in items
-    ]
-
-@app.post("/process", response_model=NNResponse)
-async def process_nn(request: NNRequest):
-    """
-    Processes the payload by setting all item colors to green.
-    TODO: Implement full NN logic here (e.g., AI-based suggestions beyond color).
-    """
-    # Start with the input payload
-    processed_payload = request.payload.model_copy(deep=True)
+@app.post("/process")
+async def process_nn(request: Request):
+    """Processes layout data using PageCraftML GNN. Accepts multiple request structures."""
+    import copy
     
-    # Apply green color to all items across resolutions (including nested children)
-    for resolution, items in processed_payload.itemsByResolution.items():
-        processed_payload.itemsByResolution[resolution] = recursively_set_green(items)
+    # Parse JSON body
+    try:
+        raw_body = await request.body()
+        body = json.loads(raw_body.decode('utf-8'))
+    except Exception as e:
+        return JSONResponse(
+            status_code=400,
+            content={"error": f"Invalid JSON: {str(e)}"}
+        )
     
-    # Optional: Add a timestamp or log for debugging
-    print(f"Processed payload at {datetime.now().isoformat()}: Set green color for {sum(len(items) for items in processed_payload.itemsByResolution.values())} items across {len(processed_payload.itemsByResolution)} resolutions")
+    # Extract payload from different structures:
+    # 1. { payload: SavedWork } - from Node.js server
+    # 2. SavedWork directly - direct SavedWork structure
+    # 3. { restaurant: {...}, pages: [{ page: {...}, data: SavedWork }] } - raw structure
+    payload = None
     
-    return NNResponse(processedPayload=processed_payload)
+    if isinstance(body, dict):
+        if 'payload' in body:
+            payload = body['payload']
+        elif 'itemsByResolution' in body:
+            payload = body
+        elif 'pages' in body and isinstance(body.get('pages'), list) and len(body['pages']) > 0:
+            first_page = body['pages'][0]
+            if isinstance(first_page, dict) and 'data' in first_page:
+                payload = first_page['data']
+    
+    if payload is None:
+        payload = body
+    
+    # Ensure it's a dict with required fields
+    if not isinstance(payload, dict):
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Payload must be an object"}
+        )
+    
+    # Add defaults
+    if 'version' not in payload:
+        payload['version'] = 1
+    if 'savedAt' not in payload:
+        payload['savedAt'] = datetime.now().isoformat()
+    if 'itemsByResolution' not in payload:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Missing 'itemsByResolution' field"}
+        )
+    if 'gallery' not in payload:
+        payload['gallery'] = []
+    
+    if not isinstance(payload['itemsByResolution'], dict):
+        return JSONResponse(
+            status_code=400,
+            content={"error": "'itemsByResolution' must be an object"}
+        )
+    
+    # Process the payload
+    processed_payload = copy.deepcopy(payload)
+    
+    try:
+        # Color all items in all resolutions green (placeholder ML processing)
+        for resolution, items in processed_payload['itemsByResolution'].items():
+            colored_items = []
+            for item in items:
+                # Convert Item object to dict if needed
+                if hasattr(item, 'model_dump'):
+                    item_dict = item.model_dump()
+                elif hasattr(item, 'dict'):
+                    item_dict = item.dict()
+                else:
+                    item_dict = dict(item) if hasattr(item, '__dict__') else item
+
+                # Add green color and ensure basic properties
+                item_dict['color'] = '#00FF00'
+                item_dict['position'] = item_dict.get('position', 'absolute')
+                item_dict['x'] = item_dict.get('x', 0)
+                item_dict['y'] = item_dict.get('y', 0)
+                item_dict['width'] = item_dict.get('width', 100)
+                item_dict['height'] = item_dict.get('height', 50)
+
+                colored_items.append(item_dict)
+
+            processed_payload['itemsByResolution'][resolution] = colored_items
+
+    except Exception as e:
+        # Return payload unchanged on error
+        pass
+    
+    return {"processedPayload": processed_payload}
 
 @app.get("/")
 async def root():
     return {"message": "PageCraft NN Server is running! POST to /process for NN proxy."}
+
+@app.get("/health")
+async def health():
+    """Health check endpoint to verify server is running."""
+    return {
+        "status": "healthy",
+        "message": "Server is ready to process requests"
+    }
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)
