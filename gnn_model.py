@@ -39,7 +39,8 @@ class LayoutGNN(nn.Module):
         
         self.convs.append(GCNConv(hidden_dim, hidden_dim))
         
-        # Output layers for different property types
+        # Output layers for different property types - PER NODE predictions
+        # Each node gets its own size and alignment predictions
         self.size_head = nn.Linear(hidden_dim, 4)  # width, height, imageWidth, imageHeight
         self.alignment_head = nn.Linear(hidden_dim, 4)  # alignItems, justifyContent, flexDirection, alignContent
         
@@ -49,16 +50,17 @@ class LayoutGNN(nn.Module):
     def forward(self, x, edge_index, batch=None):
         """
         Forward pass through the GNN.
+        Returns PER-NODE predictions (not graph-level).
         
         Args:
             x: Node features [num_nodes, input_dim]
             edge_index: Edge connectivity [2, num_edges]
-            batch: Batch vector for graph-level pooling [num_nodes]
+            batch: Batch vector (not used for per-node predictions)
         
         Returns:
-            Tuple of (size_predictions, alignment_predictions)
+            Tuple of (size_predictions [num_nodes, 4], alignment_predictions [num_nodes, 4])
         """
-        # Graph convolutions
+        # Graph convolutions - learn node representations
         for i, conv in enumerate(self.convs):
             x = conv(x, edge_index)
             if i < len(self.convs) - 1:
@@ -66,16 +68,10 @@ class LayoutGNN(nn.Module):
                 x = F.relu(x)
                 x = self.dropout(x)
         
-        # Graph-level pooling if batch is provided
-        if batch is not None:
-            x = global_mean_pool(x, batch)
-        else:
-            # Simple mean pooling for single graph
-            x = x.mean(dim=0, keepdim=True)
-        
-        # Predict sizes and alignments
-        sizes = self.size_head(x)
-        alignments = self.alignment_head(x)
+        # Predict sizes and alignments FOR EACH NODE
+        # x is [num_nodes, hidden_dim], so outputs are [num_nodes, 4]
+        sizes = self.size_head(x)  # [num_nodes, 4]
+        alignments = self.alignment_head(x)  # [num_nodes, 4]
         
         return sizes, alignments
 
@@ -223,19 +219,21 @@ def predict_resolution_properties(
     target_width: int,
     target_height: int,
     desktop_width: int = 1920,
-    desktop_height: int = 1080
+    desktop_height: int = 1080,
+    use_model_predictions: bool = False
 ) -> List[Dict[str, Any]]:
     """
     Predict properties for target resolution based on desktop layout.
     Note: Only processes static items (position="static"). Absolute items are ignored.
     
     Args:
-        model: Trained GNN model
+        model: Trained GNN model (or untrained for rule-based fallback)
         desktop_items: Desktop items (should already be filtered to static items only)
         target_width: Target resolution width
         target_height: Target resolution height
         desktop_width: Desktop canvas width
         desktop_height: Desktop canvas height
+        use_model_predictions: If True, use model predictions; if False, use rule-based
     
     Returns:
         List of items with predicted properties for target resolution
@@ -248,6 +246,30 @@ def predict_resolution_properties(
     if graph.x.shape[0] == 0:
         return []
     
+    # Try to use model predictions if available and requested
+    if use_model_predictions:
+        try:
+            from decode_predictions import decode_model_predictions
+            
+            device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+            graph_gpu = graph.to(device)
+            model_gpu = model.to(device)
+            
+            with torch.no_grad():
+                sizes_pred, alignments_pred = model_gpu(graph_gpu.x, graph_gpu.edge_index)
+            
+            # Decode model predictions
+            predicted_items = decode_model_predictions(
+                sizes_pred, alignments_pred, desktop_items, target_width, target_height,
+                desktop_width, desktop_height
+            )
+            
+            return predicted_items
+        except Exception as e:
+            print(f"Model prediction failed, falling back to rules: {e}")
+            # Fall through to rule-based
+    
+    # Rule-based prediction (current implementation)
     # Scale factor
     width_scale = target_width / desktop_width
     height_scale = target_height / desktop_height

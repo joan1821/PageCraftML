@@ -30,6 +30,33 @@ STRUCTURAL_PROPERTIES: Set[str] = {
 }
 
 
+def extract_target_properties(item: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Extract only size/alignment properties from an item.
+    This is what we want the model to predict.
+    
+    Args:
+        item: Item dictionary
+    
+    Returns:
+        Item with only size/alignment properties
+    """
+    target = {'id': item.get('id')}
+    
+    size_align_props = ['width', 'height', 'imageWidth', 'imageHeight', 
+                        'alignItems', 'justifyContent', 'flexDirection', 'alignContent']
+    
+    for prop in size_align_props:
+        if prop in item:
+            target[prop] = item[prop]
+    
+    # Recursively process children
+    if 'children' in item and item['children']:
+        target['children'] = [extract_target_properties(child) for child in item['children']]
+    
+    return target
+
+
 def clean_item_for_prediction(item: Dict[str, Any]) -> Dict[str, Any]:
     """
     Clean an item to keep only properties relevant for size/alignment prediction.

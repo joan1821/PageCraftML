@@ -3,12 +3,13 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 import uvicorn
 from datetime import datetime
 import json
 import copy
 import sys
+import os
 
 # Import GNN model and data processing utilities
 from gnn_model import LayoutGNN, predict_resolution_properties
@@ -48,25 +49,38 @@ class SavedWork(BaseModel):
     gallery: Optional[List[Any]] = []
 
 
-# Initialize GNN model (in production, load from checkpoint)
-# For now, create a new model instance
-# In production, you would load a trained model:
-# model = LayoutGNN()
-# model.load_state_dict(torch.load('model_checkpoint.pth'))
-# model.eval()
-
-# Lazy initialization - model will be created on first use
+# Initialize GNN model - load trained model if available, otherwise use untrained
 _model = None
+_model_path = "model_checkpoint.pth"
+_model_trained = False
 
-def get_model() -> LayoutGNN:
-    """Get or create the GNN model instance."""
-    global _model
+def get_model() -> Tuple[LayoutGNN, bool]:
+    """Get or create the GNN model instance. Loads trained weights if available.
+    
+    Returns:
+        Tuple of (model, is_trained)
+    """
+    global _model, _model_trained
     if _model is None:
         _model = LayoutGNN()
+        
+        # Try to load trained model weights
+        if os.path.exists(_model_path):
+            try:
+                _model.load_state_dict(torch.load(_model_path, map_location='cpu'))
+                _model_trained = True
+                print(f"Loaded trained model from {_model_path}")
+            except Exception as e:
+                print(f"Warning: Could not load model from {_model_path}: {e}")
+                print("Using untrained model (rule-based predictions)")
+                _model_trained = False
+        else:
+            print(f"No trained model found at {_model_path}. Using rule-based predictions.")
+            print("Train a model using: python train_model.py")
+            _model_trained = False
+        
         _model.eval()
-        # In production, load trained weights here
-        # _model.load_state_dict(torch.load('model_checkpoint.pth'))
-    return _model
+    return _model, _model_trained
 
 
 def find_desktop_resolution(items_by_resolution: Dict[str, Any]) -> Optional[str]:
@@ -223,7 +237,7 @@ async def process_nn(request: Request):
         desktop_width, desktop_height = get_resolution_dimensions(desktop_resolution)
         
         # Step 3: Process with GNN for each non-desktop resolution
-        model = get_model()
+        model, model_is_trained = get_model()
         
         # Standard resolutions to predict for (if not already present)
         standard_resolutions = [
@@ -276,7 +290,8 @@ async def process_nn(request: Request):
                     target_width=target_width,
                     target_height=target_height,
                     desktop_width=desktop_width,
-                    desktop_height=desktop_height
+                    desktop_height=desktop_height,
+                    use_model_predictions=model_is_trained  # Use model if trained, otherwise rules
                 )
                 
                 if not predicted_items:
