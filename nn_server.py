@@ -22,10 +22,18 @@ import torch
 
 app = FastAPI(title="PageCraft NN Proxy Server", version="1.0.0")
 
+# Backend server configuration
+BACKEND_SERVER_URL = os.environ.get("BACKEND_SERVER_URL", "https://pagecraftserver-production-d2dd.up.railway.app")
+
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins
+    allow_origins=[
+        BACKEND_SERVER_URL,
+        "http://localhost:3000",  # Local development
+        "http://localhost:5000",
+        "*"  # Allow all for development - restrict in production
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -385,4 +393,6 @@ async def health():
     }
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)
+    import os
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port, reload=False)
