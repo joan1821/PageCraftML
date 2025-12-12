@@ -35,7 +35,11 @@ htmlcov/
 
 # Documentation
 *.md
-!README.md
 
 # Logs
 *.log
+
+# Training files (not needed for deployment)
+training_data/
+train_model.py
+extract_training_examples.py

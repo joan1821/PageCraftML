@@ -10,11 +10,12 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
+# Install system dependencies (minimal)
+RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     g++ \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
 
 # Copy requirements first for better caching
 COPY requirements.txt .
@@ -22,8 +23,13 @@ COPY requirements.txt .
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
-COPY . .
+# Copy only necessary files (exclude __pycache__, .git, etc.)
+COPY nn_server.py .
+COPY gnn_model.py .
+COPY data_processor.py .
+COPY decode_predictions.py .
+COPY predict_with_model.py .
+COPY model_checkpoint.pth .
 
 # Create training_data directory if it doesn't exist
 RUN mkdir -p training_data
