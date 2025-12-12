@@ -30,6 +30,10 @@ COPY data_processor.py .
 COPY decode_predictions.py .
 COPY predict_with_model.py .
 COPY model_checkpoint.pth .
+COPY start.sh .
+
+# Make start script executable
+RUN chmod +x start.sh
 
 # Create training_data directory if it doesn't exist
 RUN mkdir -p training_data
@@ -37,5 +41,5 @@ RUN mkdir -p training_data
 # Expose port (Railway will set PORT env variable)
 EXPOSE 8000
 
-# Run the application - Railway uses $PORT
-CMD ["sh", "-c", "uvicorn nn_server:app --host 0.0.0.0 --port ${PORT:-8000}"]
+# Run the application using start script
+CMD ["./start.sh"]
